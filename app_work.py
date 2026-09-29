@@ -86,8 +86,13 @@ if 'freight_list' not in st.session_state:
         }
     ]
 
-# 增強版文字 Parsing 函數
+# 升級版：支援海運櫃型與空運（含 FSC/SSC/重量計算及細項 Local 費加總）
 def parse_freight_text(text):
+    # 1. 判斷運送型態 (海運 40HQ/20GP 或 空運 Air)
+    is_air = bool(re.search(r'(?:Air|空運|KGS?|KG|PVG|TPE|HKG)', text, re.IGNORECASE))
+    mode_label = "Air Cargo" if is_air else "40HQ"
+
+    # 2. 辨識貨代名稱
     vendor = "新貨代/報價單"
     if "捷達" in text or "Jieda" in text: 
         vendor = "捷達國際物流"
@@ -103,19 +108,37 @@ def parse_freight_text(text):
         vendor = lines[0][:15] if lines else "新貨代"
         customs_default = "OO報關行"
 
-    # 1. 抓取海運費 (USD)
-    usd_match = re.search(r'(?:Ocean|Freight|海運費|USD|\$)\s*:?\s*USD?\s*([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
-    ocean_usd = float(usd_match.group(1).replace(',', '')) if usd_match else 2000.0
-
-    # 2. 抓取匯率
+    # 3. 抓取匯率 (預設 32.0)
     rate_match = re.search(r'(?:匯率|Exchange Rate|Ex Rate|Rate)\s*:?\s*([\d\.]+)', text, re.IGNORECASE)
     exchange_rate = float(rate_match.group(1)) if rate_match else 32.0
 
-    # 3. 多項 TW Local 費用關鍵字自動掃描與加總
+    # 4. 計算主體運費 (Ocean/Air Freight_USD)
+    ocean_usd = 0.0
+    if is_air:
+        # 空運計算邏輯：(Base Rate + FSC + SSC) * Chargeable Weight
+        weight_match = re.search(r'(?:Weight|重量|計費重量)\s*:?\s*([\d,]+)\s*KGS?', text, re.IGNORECASE)
+        weight = float(weight_match.group(1).replace(',', '')) if weight_match else 500.0
+
+        base_rate_match = re.search(r'(?:Air Freight|Freight Rate|運費)\s*:?\s*(?:USD|\$)?\s*([\d\.]+)', text, re.IGNORECASE)
+        fsc_match = re.search(r'FSC\s*:?\s*(?:USD|\$)?\s*([\d\.]+)', text, re.IGNORECASE)
+        ssc_match = re.search(r'SSC\s*:?\s*(?:USD|\$)?\s*([\d\.]+)', text, re.IGNORECASE)
+
+        base_rate = float(base_rate_match.group(1)) if base_rate_match else 3.5
+        fsc = float(fsc_match.group(1)) if fsc_match else 0.0
+        ssc = float(ssc_match.group(1)) if ssc_match else 0.0
+
+        ocean_usd = (base_rate + fsc + ssc) * weight
+    else:
+        # 海運整櫃計算邏輯
+        usd_match = re.search(r'(?:Ocean|Freight|海運費|USD|\$)\s*:?\s*USD?\s*([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
+        ocean_usd = float(usd_match.group(1).replace(',', '')) if usd_match else 2000.0
+
+    # 5. 多項 TW Local 本地雜費自動掃描與累加 (包含空運卡車、倉棧費、AWB提單費)
     local_keywords = [
         r'THC', r'吊櫃費', r'文件費', r'Doc', r'Handling', r'手續費', 
-        r'電放費', r'Telex', r'封條費', r'Seal', r' CFS', r'併櫃費', 
-        r'本地雜費', r'Local Charges', r'Local Fee', r'報關費'
+        r'電放費', r'Telex', r'封條費', r'Seal', r'CFS', r'併櫃費', 
+        r'本地雜費', r'Local Charges', r'Local Fee', r'報關費',
+        r'Terminal', r'倉棧費', r'AWB', r'提單費', r'建單費', r'Trucking', r'卡車費'
     ]
     
     total_local_ntd = 0.0
@@ -127,28 +150,27 @@ def parse_freight_text(text):
                 amount_match = re.search(r'(?:NTD|NT\$|\$|\:\s*)\s*([\d,]+)', line, re.IGNORECASE)
                 if amount_match:
                     val = float(amount_match.group(1).replace(',', ''))
-                    if val < 50000:  # 過濾避免抓到總海運費
+                    if val < 50000:  # 過濾總額，避免抓到整體海運費
                         total_local_ntd += val
                         found_local = True
                 break
 
     if not found_local:
-        total_local_ntd = 12000.0
+        total_local_ntd = 8000.0 if is_air else 12000.0
 
-    # 4. 抓取航程天數
+    # 6. 抓取航程天數
     days_match = re.search(r'(\d+)\s*(?:天|days)', text, re.IGNORECASE)
-    days = int(days_match.group(1)) if days_match else 14
+    days = int(days_match.group(1)) if days_match else (2 if is_air else 14)
 
     return {
         '廠商名稱': vendor,
-        '櫃型': '40HQ',
+        '櫃型': mode_label,
         '海運費_USD': ocean_usd,
         '匯率_USD_NTD': exchange_rate,
         '本地雜費_NTD': total_local_ntd,
         '配合報關行': customs_default,
         '預計航程_天': days
-    }
-# -----------------------------------------------------------------------------
+    }# -----------------------------------------------------------------------------
 # 分頁設計 (Tabs)
 # -----------------------------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
