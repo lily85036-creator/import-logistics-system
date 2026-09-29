@@ -133,11 +133,11 @@ def parse_freight_text(text):
         usd_match = re.search(r'(?:Ocean|Freight|海運費|USD|\$)\s*:?\s*USD?\s*([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
         ocean_usd = float(usd_match.group(1).replace(',', '')) if usd_match else 2000.0
 
-    # 5. 多項 TW Local 本地雜費自動掃描與累加 (包含空運卡車、倉棧費、AWB提單費)
+    # 5. 多項 TW Local 本地雜費自動掃描與累加 (精準不重覆抓取版)
     local_keywords = [
         r'THC', r'吊櫃費', r'文件費', r'Doc', r'Handling', r'手續費', 
         r'電放費', r'Telex', r'封條費', r'Seal', r'CFS', r'併櫃費', 
-        r'本地雜費', r'Local Charges', r'Local Fee', r'報關費',
+        r'本地雜費', r'Local Charges', r'Local Fee', r'報關',
         r'Terminal', r'倉棧費', r'AWB', r'提單費', r'建單費', r'Trucking', r'卡車費'
     ]
     
@@ -145,15 +145,16 @@ def parse_freight_text(text):
     found_local = False
 
     for line in text.split('\n'):
-        for kw in local_keywords:
-            if re.search(kw, line, re.IGNORECASE):
-                amount_match = re.search(r'(?:NTD|NT\$|\$|\:\s*)\s*([\d,]+)', line, re.IGNORECASE)
-                if amount_match:
-                    val = float(amount_match.group(1).replace(',', ''))
-                    if val < 50000:  # 過濾總額，避免抓到整體海運費
-                        total_local_ntd += val
-                        found_local = True
-                break
+        # 1. 先確認這一行是否有包含 TW Local 關鍵字
+        if any(re.search(kw, line, re.IGNORECASE) for kw in local_keywords):
+            # 2. 抓取這一行出現的 NTD 或 NT$ 金額數字
+            amount_match = re.search(r'(?:NTD|NT\$|\$|\:\s*)\s*([\d,]+)', line, re.IGNORECASE)
+            if amount_match:
+                val = float(amount_match.group(1).replace(',', ''))
+                # 過濾過大的金額（避免抓到總海運費）
+                if val < 50000:
+                    total_local_ntd += val
+                    found_local = True
 
     if not found_local:
         total_local_ntd = 8000.0 if is_air else 12000.0
