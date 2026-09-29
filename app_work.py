@@ -88,7 +88,7 @@ if 'freight_list' not in st.session_state:
 
 # 增強版文字 Parsing 函數
 def parse_freight_text(text):
-    vendor = "未知貨代"
+    vendor = "新貨代/報價單"
     if "捷達" in text or "Jieda" in text: 
         vendor = "捷達國際物流"
         customs_default = "OO報關行"
@@ -103,12 +103,39 @@ def parse_freight_text(text):
         vendor = lines[0][:15] if lines else "新貨代"
         customs_default = "OO報關行"
 
-    usd_match = re.search(r'(?:USD|\$)\s*([\d,]+)', text, re.IGNORECASE)
+    # 1. 抓取海運費 (USD)
+    usd_match = re.search(r'(?:Ocean|Freight|海運費|USD|\$)\s*:?\s*USD?\s*([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
     ocean_usd = float(usd_match.group(1).replace(',', '')) if usd_match else 2000.0
 
-    local_match = re.search(r'(?:本地雜費|Local Charges|THC|Local Fee).*?(?:NTD|NT\$|\$)?\s*([\d,]+)', text, re.IGNORECASE)
-    local_ntd = float(local_match.group(1).replace(',', '')) if local_match else 12000.0
+    # 2. 抓取匯率
+    rate_match = re.search(r'(?:匯率|Exchange Rate|Ex Rate|Rate)\s*:?\s*([\d\.]+)', text, re.IGNORECASE)
+    exchange_rate = float(rate_match.group(1)) if rate_match else 32.0
 
+    # 3. 多項 TW Local 費用關鍵字自動掃描與加總
+    local_keywords = [
+        r'THC', r'吊櫃費', r'文件費', r'Doc', r'Handling', r'手續費', 
+        r'電放費', r'Telex', r me'封條費', r'Seal', r' CFS', r'併櫃費', 
+        r'本地雜費', r'Local Charges', r'Local Fee', r'報關費'
+    ]
+    
+    total_local_ntd = 0.0
+    found_local = False
+
+    for line in text.split('\n'):
+        for kw in local_keywords:
+            if re.search(kw, line, re.IGNORECASE):
+                amount_match = re.search(r'(?:NTD|NT\$|\$|\:\s*)\s*([\d,]+)', line, re.IGNORECASE)
+                if amount_match:
+                    val = float(amount_match.group(1).replace(',', ''))
+                    if val < 50000:  # 過濾避免抓到總海運費
+                        total_local_ntd += val
+                        found_local = True
+                break
+
+    if not found_local:
+        total_local_ntd = 12000.0
+
+    # 4. 抓取航程天數
     days_match = re.search(r'(\d+)\s*(?:天|days)', text, re.IGNORECASE)
     days = int(days_match.group(1)) if days_match else 14
 
@@ -116,12 +143,11 @@ def parse_freight_text(text):
         '廠商名稱': vendor,
         '櫃型': '40HQ',
         '海運費_USD': ocean_usd,
-        '匯率_USD_NTD': 32.0,
-        '本地雜費_NTD': local_ntd,
+        '匯率_USD_NTD': exchange_rate,
+        '本地雜費_NTD': total_local_ntd,
         '配合報關行': customs_default,
         '預計航程_天': days
     }
-
 # -----------------------------------------------------------------------------
 # 分頁設計 (Tabs)
 # -----------------------------------------------------------------------------
