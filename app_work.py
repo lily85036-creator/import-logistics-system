@@ -114,7 +114,7 @@ def parse_freight_text(text):
     # 3. 多項 TW Local 費用關鍵字自動掃描與加總
     local_keywords = [
         r'THC', r'吊櫃費', r'文件費', r'Doc', r'Handling', r'手續費', 
-        r'電放費', r'Telex', r me'封條費', r'Seal', r' CFS', r'併櫃費', 
+        r'電放費', r'Telex', r'封條費', r'Seal', r' CFS', r'併櫃費', 
         r'本地雜費', r'Local Charges', r'Local Fee', r'報關費'
     ]
     
