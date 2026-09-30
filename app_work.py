@@ -10,23 +10,25 @@ st.set_page_config(
 )
 
 # 系統標題
-st.title("🚢 AI 智慧進口貿易與物流自動化系統")
-st.caption("專為進口國貿同仁打造：Email 報價自動解析 ➔ 落地成本平攤算力 ➔ 智慧決策議價")
+st.title("🚢 進出口物流報價比價與 AI 溝通系統")
+st.caption("Email 報價自動解析 ➔ 海運雜費與報關整合 ➔ AI 自動議價信生成")
 
 # -----------------------------------------------------------------------------
 # 預設範例資料與初始化
 # -----------------------------------------------------------------------------
+# 1. 報關行參考表：新增第二櫃起費用 (400, 450, 500)
 if 'customs_df' not in st.session_state:
     st.session_state.customs_df = pd.DataFrame([
-        {"報關行名稱": "OO報關行", "報關費_NTD": 1700, "傳輸費_NTD": 300},
-        {"報關行名稱": "XX報關行", "報關費_NTD": 1500, "傳輸費_NTD": 400},
-        {"報關行名稱": "OX報關行", "報關費_NTD": 1300, "傳輸費_NTD": 500}
+        {"報關行名稱": "OO報關行", "報關費_NTD": 1700, "第二櫃起單櫃報關費_NTD": 400, "傳輸費_NTD": 300},
+        {"報關行名稱": "XX報關行", "報關費_NTD": 1500, "第二櫃起單櫃報關費_NTD": 450, "傳輸費_NTD": 400},
+        {"報關行名稱": "OX報關行", "報關費_NTD": 1300, "第二櫃起單櫃報關費_NTD": 500, "傳輸費_NTD": 500}
     ])
 
 sample_email_1 = """
 Hi Team,
 以下為上海到基隆 40HQ 報價：
 - 船公司：捷達國際物流 (Jieda Logistics)
+- 數量：2 櫃
 - 海運費 (Ocean Freight): USD 2,100 / 40HQ
 - 本地雜費 (THC/Handling/Doc): NTD 12,000
 - 預計航程 (Transit Time): 12 天
@@ -35,89 +37,85 @@ Hi Team,
 """
 
 sample_email_2 = """
-Dear Cargo Team,
-最新的海運費用如下：
-海順船務 (Ocean Shun Shipping)
-40HQ 櫃型
-Ocean Freight: USD 1,950
-Local Charges in Taiwan: NTD 15,000
-Transit Time: 15 days
-Exchange rate reference: 32.0
+【空運詢報價】PVG -> TPE 國際空運專案
+貨代：萬達通運
+件數 (Cartons): 10 箱
+單箱尺寸：60 x 50 x 40 cm
+實際毛重 (GW): 180 KGS
+Air Freight: USD 3.5 / KG
+FSC: USD 0.3 / KG
+SSC: USD 0.1 / KG
+Taiwan Local Charge: NTD 6,500
+預計航程：2 天
+匯率：32.0
 """
 
 sample_email_3 = """
-【萬達報關貨代】上海-基隆 40HQ 快速直達船優惠專案報價
-海運費：USD 1,850 / 40HQ
-台灣本地雜費：NTD 11,500
-預計航程：11 天
-計費匯率：32.0
+【快遞專線】HKG -> TPE 商業快遞
+貨代：順豐/DHL快遞代理
+實際毛重 (GW): 250 KGS
+體積 (CBM): 2.2 CBM
+Air Freight: USD 4.2 / KG
+Taiwan Local Charge: NTD 3,500
+預計航程：1 天
+匯率：32.0
 """
 
-df_suppliers_sample = pd.DataFrame({
-    '國外廠商名稱': ['Alpha Global Inc.', 'Sakura Trading', 'Rheinland Logistics'],
-    '國家': ['美國', '日本', '德國'],
-    '預計交期天數': [30, 14, 45],
-    '實際交期天數': [32, 14, 50],
-    '歷史訂單數': [20, 35, 12],
-    '不良品退貨次數': [1, 0, 2],
-    '平均單價(USD)': [150, 80, 220]
-})
-
-# 初始化 Session State 儲存動態解析後的貨代資料
-if 'freight_list' not in st.session_state:
-    st.session_state.freight_list = [
-        {
-            '廠商名稱': '捷達國際物流',
-            '櫃型': '40HQ',
-            '海運費_USD': 2100.0,
-            '匯率_USD_NTD': 32.0,
-            '本地雜費_NTD': 12000.0,
-            '配合報關行': 'OO報關行',
-            '預計航程_天': 12
-        },
-        {
-            '廠商名稱': '海順船務',
-            '櫃型': '40HQ',
-            '海運費_USD': 1950.0,
-            '匯率_USD_NTD': 32.0,
-            '本地雜費_NTD': 15000.0,
-            '配合報關行': 'XX報關行',
-            '預計航程_天': 15
-        }
-    ]
-
-# 升級版：支援海運櫃型與空運（含 FSC/SSC/重量計算及細項 Local 費加總）
+# 解析報價 Email
 def parse_freight_text(text):
-    # 1. 判斷運送型態 (海運 40HQ/20GP 或 空運 Air)
-    is_air = bool(re.search(r'(?:Air|空運|KGS?|KG|PVG|TPE|HKG)', text, re.IGNORECASE))
+    is_air = bool(re.search(r'(?:Air|空運|PVG|TPE|HKG|Express|快遞)', text, re.IGNORECASE))
     mode_label = "Air Cargo" if is_air else "40HQ"
 
-    # 2. 辨識貨代名稱
-    vendor = "新貨代/報價單"
     if "捷達" in text or "Jieda" in text: 
         vendor = "捷達國際物流"
         customs_default = "OO報關行"
-    elif "海順" in text or "Ocean Shun" in text: 
-        vendor = "海順船務"
-        customs_default = "XX報關行"
     elif "萬達" in text or "Wanda" in text: 
         vendor = "萬達通運"
         customs_default = "OX報關行"
+    elif "快遞" in text or "DHL" in text or "順豐" in text:
+        vendor = "順豐/快遞專線"
+        customs_default = "XX報關行"
     else:
         lines = [l.strip() for l in text.split('\n') if l.strip()]
-        vendor = lines[0][:15] if lines else "新貨代"
+        vendor = lines[0][:15] if lines else "新貨代/報價單"
         customs_default = "OO報關行"
 
-    # 3. 抓取匯率 (預設 32.0)
-    rate_match = re.search(r'(?:匯率|Exchange Rate|Ex Rate|Rate)\s*:?\s*([\d\.]+)', text, re.IGNORECASE)
+    rate_match = re.search(r'(?:匯率|Exchange Rate|Rate)\s*:?\s*([\d\.]+)', text, re.IGNORECASE)
     exchange_rate = float(rate_match.group(1)) if rate_match else 32.0
 
-    # 4. 計算主體運費 (Ocean/Air Freight_USD)
-    ocean_usd = 0.0
+    # 海運櫃數
+    if not is_air:
+        ctn_match = re.search(r'(\d+)\s*(?:櫃|ctn|container)', text, re.IGNORECASE)
+        containers_cnt = int(ctn_match.group(1)) if ctn_match else 1
+    else:
+        containers_cnt = 0
+
+    # 尺寸、箱數、毛重、CBM 解析
+    gw_kg, cbm_val = 0.0, 0.0
+    pcs_cnt = 1
+    length_cm, width_cm, height_cm = 0.0, 0.0, 0.0
+    divisor = 6000
+
     if is_air:
-        # 空運計算邏輯：(Base Rate + FSC + SSC) * Chargeable Weight
-        weight_match = re.search(r'(?:Weight|重量|計費重量)\s*:?\s*([\d,]+)\s*KGS?', text, re.IGNORECASE)
-        weight = float(weight_match.group(1).replace(',', '')) if weight_match else 500.0
+        gw_match = re.search(r'(?:GW|Gross Weight|毛重|重量)\s*:?\s*([\d,]+(?:\.\d+)?)\s*KGS?', text, re.IGNORECASE)
+        gw_kg = float(gw_match.group(1).replace(',', '')) if gw_match else 180.0
+
+        pcs_match = re.search(r'(\d+)\s*(?:箱|件|Cartons|ctns|pcs)', text, re.IGNORECASE)
+        if pcs_match:
+            pcs_cnt = int(pcs_match.group(1))
+
+        dim_match = re.search(r'(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)', text)
+        if dim_match:
+            length_cm = float(dim_match.group(1))
+            width_cm = float(dim_match.group(2))
+            height_cm = float(dim_match.group(3))
+
+        cbm_match = re.search(r'(?:CBM|體積)\s*:?\s*([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
+        if cbm_match:
+            cbm_val = float(cbm_match.group(1).replace(',', ''))
+
+        if "快遞" in text or "Express" in text or "DHL" in text:
+            divisor = 5000
 
         base_rate_match = re.search(r'(?:Air Freight|Freight Rate|運費)\s*:?\s*(?:USD|\$)?\s*([\d\.]+)', text, re.IGNORECASE)
         fsc_match = re.search(r'FSC\s*:?\s*(?:USD|\$)?\s*([\d\.]+)', text, re.IGNORECASE)
@@ -127,330 +125,344 @@ def parse_freight_text(text):
         fsc = float(fsc_match.group(1)) if fsc_match else 0.0
         ssc = float(ssc_match.group(1)) if ssc_match else 0.0
 
-        ocean_usd = (base_rate + fsc + ssc) * weight
+        unit_usd = base_rate + fsc + ssc
     else:
-        # 海運整櫃計算邏輯
-        usd_match = re.search(r'(?:Ocean|Freight|海運費|USD|\$)\s*:?\s*USD?\s*([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
-        ocean_usd = float(usd_match.group(1).replace(',', '')) if usd_match else 2000.0
+        usd_match = re.search(r'(?:Ocean Freight|Ocean|Freight)\s*:?\s*(?:USD|\$)?\s*([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
+        unit_usd = float(usd_match.group(1).replace(',', '')) if usd_match else 2100.0
 
-    # 5. 多項 TW Local 本地雜費自動掃描與累加 (精準不重覆抓取版)
-    local_keywords = [
-        r'THC', r'吊櫃費', r'文件費', r'Doc', r'Handling', r'手續費', 
-        r'電放費', r'Telex', r'封條費', r'Seal', r'CFS', r'併櫃費', 
-        r'本地雜費', r'Local Charges', r'Local Fee', r'報關',
-        r'Terminal', r'倉棧費', r'AWB', r'提單費', r'建單費', r'Trucking', r'卡車費'
-    ]
-    
+    local_keywords = [r'THC', r'Doc', r'Handling', r'Local Charge', r'本地雜費', r'提單費', r'卡車費']
     total_local_ntd = 0.0
     found_local = False
 
     for line in text.split('\n'):
-        # 1. 先確認這一行是否有包含 TW Local 關鍵字
         if any(re.search(kw, line, re.IGNORECASE) for kw in local_keywords):
-            # 2. 抓取這一行出現的 NTD 或 NT$ 金額數字
             amount_match = re.search(r'(?:NTD|NT\$|\$|\:\s*)\s*([\d,]+)', line, re.IGNORECASE)
             if amount_match:
                 val = float(amount_match.group(1).replace(',', ''))
-                # 過濾過大的金額（避免抓到總海運費）
                 if val < 50000:
                     total_local_ntd += val
                     found_local = True
 
     if not found_local:
-        total_local_ntd = 8000.0 if is_air else 12000.0
+        total_local_ntd = 6500.0 if is_air else 12000.0
 
-    # 6. 抓取航程天數
     days_match = re.search(r'(\d+)\s*(?:天|days)', text, re.IGNORECASE)
-    days = int(days_match.group(1)) if days_match else (2 if is_air else 14)
+    days = int(days_match.group(1)) if days_match else (2 if is_air else 12)
 
     return {
         '廠商名稱': vendor,
         '櫃型': mode_label,
-        '海運費_USD': ocean_usd,
+        '櫃數': containers_cnt,
+        '毛重_KG': gw_kg,
+        '箱數_PCS': pcs_cnt,
+        '長_cm': length_cm,
+        '寬_cm': width_cm,
+        '高_cm': height_cm,
+        '體積_CBM': cbm_val,
+        '材積除數': divisor,
+        '運費單價_USD': unit_usd,
         '匯率_USD_NTD': exchange_rate,
         '本地雜費_NTD': total_local_ntd,
         '配合報關行': customs_default,
         '預計航程_天': days
-    }# -----------------------------------------------------------------------------
-# 分頁設計 (Tabs)
+    }
+
+if 'freight_list' not in st.session_state:
+    st.session_state.freight_list = [
+        parse_freight_text(sample_email_1),
+        parse_freight_text(sample_email_2)
+    ]
+
 # -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
-    "⚡ Email 報價文字自動解析與比價", 
-    "🏢 國外供應商綜合評比", 
-    "📦 產品總落地成本 (Landed Cost)", 
+# 分頁設計
+# -----------------------------------------------------------------------------
+tab1, tab2, tab3 = st.tabs([
+    "⚡ 運費與報價自動比價 (含空運長寬高試算)", 
+    "📦 供應商與貨代績效評鑑 (AHP/加權評分)", 
     "🤖 AI 國貿溝通秘書"
 ])
 
 # =============================================================================
-# TAB 1: Email 報價文字自動解析與比價
+# TAB 1: 運費與報價自動比價
 # =============================================================================
 with tab1:
     st.header("⚡ 貨代 & 報關行 組合報價與總金額比價")
-    st.caption("💡 實務功能：上方提供報關行費用參考表；下方僅保留一個總費用試算明細表！")
-
-    # -------------------------------------------------------------------------
-    # 區塊 1：報關行收費標準參考表（常駐查閱、可自由修改）
-    # -------------------------------------------------------------------------
-    st.subheader("📑 1. 報關行收費標準參考表 (隨時查閱與修改備查)")
+    
+    # 報關行參考表
+    st.subheader("📑 1. 報關行收費標準參考表")
     edited_customs_df = st.data_editor(
         st.session_state.customs_df,
         num_rows="dynamic",
         key="customs_editor",
-        use_container_width=True
+        use_container_width=True,
+        column_config={
+            "報關費_NTD": st.column_config.NumberColumn("首櫃報關費 (NTD)", format="$%d"),
+            "第二櫃起單櫃報關費_NTD": st.column_config.NumberColumn("第二櫃起單櫃報關費 (NTD)", format="$%d"),
+            "傳輸費_NTD": st.column_config.NumberColumn("傳輸費 (NTD/票)", format="$%d", help="無論幾櫃，單票僅收一次")
+        }
     )
     st.session_state.customs_df = edited_customs_df
-
-    # 將報關行資料轉換為字典，供下方總金額表自動對照連動
     customs_map = edited_customs_df.set_index("報關行名稱").to_dict(orient="index")
     customs_options = list(customs_map.keys()) if customs_map else ["OO報關行"]
 
     st.divider()
 
-    # -------------------------------------------------------------------------
-    # 區塊 2：Email 報價解析與輸入
-    # -------------------------------------------------------------------------
+    # Email 解析區塊
     st.subheader("✉️ 2. 貼上貨代 Email 報價文字")
     col_input, col_preset = st.columns([2, 1])
     
     with col_input:
         raw_email_input = st.text_area(
-            "請將貨代業務寄來的 Email 報價文字直接貼在下方：", 
-            height=130,
-            placeholder="貼上文字範例：\n萬達報關貨代 40HQ 報價\nOcean Freight: USD 1,850\nLocal Fee: NTD 11,500\nTransit Time: 11 days"
+            "請貼上 Email 報價文字（支援長寬高、尺寸、GW與CBM）：", 
+            height=120,
+            placeholder="範例：上海到基隆 40HQ 報價，數量：2櫃，Ocean Freight: USD 2,100..."
         )
         if st.button("🚀 執行 AI 文字解析並加入比較表"):
             if raw_email_input.strip():
                 parsed_data = parse_freight_text(raw_email_input)
                 st.session_state.freight_list.append(parsed_data)
-                st.success(f"✅ 成功提取【{parsed_data['廠商名稱']}】報價！已自動帶入下方比價表。")
+                st.success(f"✅ 成功提取【{parsed_data['廠商名稱']}】報價！")
                 st.rerun()
-            else:
-                st.warning("請先輸入或貼上 Email 文字。")
 
     with col_preset:
-        st.write("**📋 快速測試範例：**")
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("載入捷達 Email"):
-                st.session_state.freight_list.append(parse_freight_text(sample_email_1))
-                st.rerun()
-            if st.button("載入萬達 Email"):
-                st.session_state.freight_list.append(parse_freight_text(sample_email_3))
-                st.rerun()
-        with col_btn2:
-            if st.button("載入海順 Email"):
-                st.session_state.freight_list.append(parse_freight_text(sample_email_2))
-                st.rerun()
-            if st.button("🔄 重置比價表"):
-                st.session_state.freight_list = st.session_state.freight_list[:2]
-                st.rerun()
+        st.write("**📋 範例載入：**")
+        if st.button("載入捷達 (海運 - 2櫃)"):
+            st.session_state.freight_list.append(parse_freight_text(sample_email_1))
+            st.rerun()
+        if st.button("載入萬達 (空運 - 60x50x40cm)"):
+            st.session_state.freight_list.append(parse_freight_text(sample_email_2))
+            st.rerun()
+        if st.button("🔄 重置比價表"):
+            st.session_state.freight_list = [
+                parse_freight_text(sample_email_1),
+                parse_freight_text(sample_email_2)
+            ]
+            st.rerun()
 
     st.divider()
 
-    # -------------------------------------------------------------------------
-    # 區塊 3：單一組合報價與【總金額】動態互動表
-    # -------------------------------------------------------------------------
-    st.subheader("📋 3. 貨代 + 報關行 組合報價與【總金額】明細表 (唯一加總表)")
-    st.caption("💡 說明：在「配合報關行」下拉選單切換報關行，系統會自動帶入對應的報關費與傳輸費，並直接在最右側試算出【總金額_NTD】！")
+    # 比價明細表
+    st.subheader("📋 3. 貨代組合報價與【計費重量】比價明細表")
+    st.caption("""
+    💡 **最新計費規則**：
+    - **海運報關費**：第 1 櫃收取【首櫃報關費】，第 2 櫃起每櫃加收【第二櫃起單櫃報關費】。
+    - **傳輸費**：以「單票」計算，**不會**因為櫃數增加而重複收取。
+    - **空運計費**：比較「實際毛重」與「材積重量（尺寸或 CBM 換算）」，取較重者計價。
+    """)
 
-    # 準備基礎資料表並帶入最新計算
     df_freight = pd.DataFrame(st.session_state.freight_list)
 
-    if '配合報關行' not in df_freight.columns:
-        df_freight['配合報關行'] = customs_options[0] if customs_options else "OO報關行"
+    if not df_freight.empty:
+        if '配合報關行' not in df_freight.columns:
+            df_freight['配合報關行'] = customs_options[0] if customs_options else "OO報關行"
 
-    # 動態計算：讀取上方參考表帶入報關費與傳輸費，並算出總金額
-    df_freight['報關費_NTD'] = df_freight['配合報關行'].apply(
-        lambda x: customs_map.get(x, {}).get('報關費_NTD', 0) if x in customs_map else 0
-    )
-    df_freight['傳輸費_NTD'] = df_freight['配合報關行'].apply(
-        lambda x: customs_map.get(x, {}).get('傳輸費_NTD', 0) if x in customs_map else 0
-    )
-    df_freight['海運費_NTD'] = df_freight['海運費_USD'] * df_freight['匯率_USD_NTD']
-    df_freight['總金額_NTD'] = df_freight['海運費_NTD'] + df_freight['本地雜費_NTD'] + df_freight['報關費_NTD'] + df_freight['傳輸費_NTD']
+        # 空運重量指標計算
+        def compute_air_metrics(row):
+            if row['櫃型'] == 'Air Cargo':
+                gw = float(row.get('毛重_KG', 0))
+                pcs = float(row.get('箱數_PCS', 1))
+                l = float(row.get('長_cm', 0))
+                w = float(row.get('寬_cm', 0))
+                h = float(row.get('高_cm', 0))
+                cbm = float(row.get('體積_CBM', 0))
+                divisor = float(row.get('材積除數', 6000))
+                
+                if divisor <= 0:
+                    divisor = 6000
 
-    # 欄位順序調整
-    display_cols = [
-        '廠商名稱', '櫃型', '海運費_USD', '匯率_USD_NTD', '海運費_NTD', 
-        '本地雜費_NTD', '配合報關行', '報關費_NTD', '傳輸費_NTD', 
-        '預計航程_天', '總金額_NTD'
-    ]
-    final_cols = [c for c in display_cols if c in df_freight.columns]
+                if l > 0 and w > 0 and h > 0:
+                    vol_weight = (l * w * h * pcs) / divisor
+                elif cbm > 0:
+                    vol_weight = cbm * (1000000.0 / divisor)
+                else:
+                    vol_weight = 0.0
 
-    # 唯一的動態加總編輯表
-    edited_df = st.data_editor(
-        df_freight[final_cols], 
-        num_rows="dynamic", 
-        key="freight_single_interactive_table",
-        use_container_width=True,
-        column_config={
-            "配合報關行": st.column_config.SelectboxColumn(
-                "配合報關行",
-                options=customs_options,
-                required=True,
-                help="下拉選擇報關行，自動對照帶入費用"
-            ),
-            "海運費_USD": st.column_config.NumberColumn("海運費 (USD)", format="$%.2f"),
-            "匯率_USD_NTD": st.column_config.NumberColumn("匯率", format="%.2f"),
-            "海運費_NTD": st.column_config.NumberColumn("海運費 (NTD)", format="$%d", disabled=True),
-            "本地雜費_NTD": st.column_config.NumberColumn("本地雜費 (NTD)", format="$%d"),
-            "報關費_NTD": st.column_config.NumberColumn("報關費 (NTD)", format="$%d", disabled=True),
-            "傳輸費_NTD": st.column_config.NumberColumn("傳輸費 (NTD)", format="$%d", disabled=True),
-            "總金額_NTD": st.column_config.NumberColumn("【總金額_NTD】", format="$%d", disabled=True)
-        }
-    )
+                chargeable_weight = max(gw, vol_weight)
+                is_light_cargo = vol_weight > gw
+                return pd.Series([round(vol_weight, 2), round(chargeable_weight, 2), "⚠️ 泡貨(取材積)" if is_light_cargo else "⚖️ 重貨(取毛重)"])
+            else:
+                return pd.Series([0.0, 0.0, "🚢 海運整櫃"])
 
-    # 若使用者在表格內即時修改了資料或切換了報關行，更新 Session State
-    for idx, row in edited_df.iterrows():
-        if idx < len(st.session_state.freight_list):
-            st.session_state.freight_list[idx]['廠商名稱'] = row['廠商名稱']
-            st.session_state.freight_list[idx]['櫃型'] = row['櫃型']
-            st.session_state.freight_list[idx]['海運費_USD'] = row['海運費_USD']
-            st.session_state.freight_list[idx]['匯率_USD_NTD'] = row['匯率_USD_NTD']
-            st.session_state.freight_list[idx]['本地雜費_NTD'] = row['本地雜費_NTD']
-            st.session_state.freight_list[idx]['配合報關行'] = row['配合報關行']
-            st.session_state.freight_list[idx]['預計航程_天'] = row['預計航程_天']
+        df_freight[['材積重量_KG', '計費重量_KG', '計費型態']] = df_freight.apply(compute_air_metrics, axis=1)
 
-    st.divider()
+        # ---------------------------------------------------------------------
+        # 修正核心：報關費 (第2櫃起差別計價) 與 傳輸費 (單票計一次)
+        # ---------------------------------------------------------------------
+        def calc_customs_fee(row):
+            c_info = customs_map.get(row['配合報關行'], {})
+            base_fee = c_info.get('報關費_NTD', 0)
+            extra_fee = c_info.get('第二櫃起單櫃報關費_NTD', 0)
+            
+            if row['櫃型'] == 'Air Cargo':
+                return base_fee  # 空運單票計算
+            else:
+                cnt = row['櫃數']
+                if cnt <= 1:
+                    return base_fee * max(1, cnt)
+                else:
+                    # 第 1 櫃為 base_fee，第 2 櫃起加上 extra_fee
+                    return base_fee + (cnt - 1) * extra_fee
 
-    # 指標卡片 (顯示最低價與平均金額)
-    if not edited_df.empty and '總金額_NTD' in edited_df.columns:
+        def calc_transfer_fee(row):
+            c_info = customs_map.get(row['配合報關行'], {})
+            # 傳輸費單票只付一次，不乘櫃數
+            return c_info.get('傳輸費_NTD', 0)
+
+        df_freight['報關費_NTD'] = df_freight.apply(calc_customs_fee, axis=1)
+        df_freight['傳輸費_NTD'] = df_freight.apply(calc_transfer_fee, axis=1)
+
+        def calc_freight_ntd(row):
+            if row['櫃型'] == 'Air Cargo':
+                return row['計費重量_KG'] * row['運費單價_USD'] * row['匯率_USD_NTD']
+            else:
+                return row['運費單價_USD'] * row['櫃數'] * row['匯率_USD_NTD']
+
+        df_freight['運費總額_NTD'] = df_freight.apply(calc_freight_ntd, axis=1)
+        df_freight['總金額_NTD'] = df_freight['運費總額_NTD'] + df_freight['本地雜費_NTD'] + df_freight['報關費_NTD'] + df_freight['傳輸費_NTD']
+
+        display_cols = [
+            '廠商名稱', '櫃型', '櫃數', '毛重_KG', '箱數_PCS', '長_cm', '寬_cm', '高_cm', 
+            '體積_CBM', '材積除數', '材積重量_KG', '計費重量_KG', '計費型態',
+            '運費單價_USD', '匯率_USD_NTD', '運費總額_NTD', '本地雜費_NTD', 
+            '配合報關行', '報關費_NTD', '傳輸費_NTD', '預計航程_天', '總金額_NTD'
+        ]
+        final_cols = [c for c in display_cols if c in df_freight.columns]
+
+        edited_df = st.data_editor(
+            df_freight[final_cols], 
+            num_rows="dynamic", 
+            key="freight_interactive_table",
+            use_container_width=True,
+            column_config={
+                "櫃型": st.column_config.SelectboxColumn("運輸型態", options=["40HQ", "20GP", "Air Cargo"], required=True),
+                "櫃數": st.column_config.NumberColumn("櫃數 (海運)", min_value=0, step=1),
+                "毛重_KG": st.column_config.NumberColumn("毛重 (KG)", format="%.1f kg"),
+                "箱數_PCS": st.column_config.NumberColumn("箱數", min_value=1, step=1),
+                "長_cm": st.column_config.NumberColumn("長 (cm)", format="%.1f"),
+                "寬_cm": st.column_config.NumberColumn("寬 (cm)", format="%.1f"),
+                "高_cm": st.column_config.NumberColumn("高 (cm)", format="%.1f"),
+                "體積_CBM": st.column_config.NumberColumn("體積 (CBM)", format="%.2f CBM"),
+                "材積除數": st.column_config.SelectboxColumn("材積除數", options=[6000, 5000]),
+                "材積重量_KG": st.column_config.NumberColumn("材積重量 (KG)", format="%.2f kg", disabled=True),
+                "計費重量_KG": st.column_config.NumberColumn("計費重量 (KG)", format="%.2f kg", disabled=True),
+                "計費型態": st.column_config.TextColumn("計費狀態", disabled=True),
+                "運費單價_USD": st.column_config.NumberColumn("單價 (USD)", format="$%.2f"),
+                "匯率_USD_NTD": st.column_config.NumberColumn("匯率", format="%.2f"),
+                "運費總額_NTD": st.column_config.NumberColumn("運費總額 (NTD)", format="$%d", disabled=True),
+                "本地雜費_NTD": st.column_config.NumberColumn("本地雜費 (NTD)", format="$%d"),
+                "配合報關行": st.column_config.SelectboxColumn("配合報關行", options=customs_options, required=True),
+                "報關費_NTD": st.column_config.NumberColumn("報關費 (NTD)", format="$%d", disabled=True, help="首櫃全額 + 第二櫃起累加"),
+                "傳輸費_NTD": st.column_config.NumberColumn("傳輸費 (NTD)", format="$%d", disabled=True, help="單票收費一次"),
+                "總金額_NTD": st.column_config.NumberColumn("【總金額_NTD】", format="$%d", disabled=True)
+            }
+        )
+
+        # 覆蓋更新 session_state
+        raw_columns = ['廠商名稱', '櫃型', '櫃數', '毛重_KG', '箱數_PCS', '長_cm', '寬_cm', '高_cm', '體積_CBM', '材積除數', '運費單價_USD', '匯率_USD_NTD', '本地雜費_NTD', '配合報關行', '預計航程_天']
+        st.session_state.freight_list = edited_df[raw_columns].to_dict(orient='records')
+
+        st.divider()
+
+        # 指標卡片
         col1, col2, col3 = st.columns(3)
         best_price_row = edited_df.loc[edited_df['總金額_NTD'].idxmin()]
         fastest_row = edited_df.loc[edited_df['預計航程_天'].idxmin()]
         
-        col1.metric(
-            "💡 最便宜組合方案", 
-            f"{best_price_row['廠商名稱']} + {best_price_row['配合報關行']}", 
-            f"NT$ {best_price_row['總金額_NTD']:,.0f}"
-        )
-        col2.metric("⚡ 最快航程方案", f"{fastest_row['廠商名稱']}", f"{fastest_row['預計航程_天']} 天")
-        col3.metric("📊 各組合平均總金額", f"NT$ {edited_df['總金額_NTD'].mean():,.0f}")
+        col1.metric("💡 最便宜總金額方案", f"{best_price_row['廠商名稱']}", f"NT$ {best_price_row['總金額_NTD']:,.0f}")
+        col2.metric("⚡ 最快時效方案", f"{fastest_row['廠商名稱']}", f"{fastest_row['預計航程_天']} 天")
+        col3.metric("📊 平均總物流費用", f"NT$ {edited_df['總金額_NTD'].mean():,.0f}")
 
 # =============================================================================
-# TAB 2: 國外供應商綜合評比
+# TAB 2: 供應商與貨代績效評鑑
 # =============================================================================
 with tab2:
-    st.header("🏢 國外供應商績效評估 (AHP / 加權評分)")
-    df_suppliers = df_suppliers_sample.copy()
-    
-    df_suppliers['交期延遲天數'] = df_suppliers['實際交期天數'] - df_suppliers['預計交期天數']
-    df_suppliers['交期得分'] = df_suppliers['交期延遲天數'].apply(lambda x: max(0, 100 - x * 10))
-    df_suppliers['不良率_%'] = (df_suppliers['不良品退貨次數'] / df_suppliers['歷史訂單數']) * 100
-    df_suppliers['品質得分'] = 100 - (df_suppliers['不良率_%'] * 5)
-    df_suppliers['綜合評分'] = (df_suppliers['交期得分'] * 0.5 + df_suppliers['品質得分'] * 0.5).round(1)
-    
-    def get_grade(score):
-        if score >= 90: return 'A級 (優良供應商)'
-        elif score >= 75: return 'B級 (觀察中)'
-        else: return 'C級 (建議替換/預警)'
-    
-    df_suppliers['評等'] = df_suppliers['綜合評分'].apply(get_grade)
+    st.header("🏢 供應商 / 貨代服務績效綜合評估")
+    st.caption("💡 透過「交期準時率」、「品質/服務滿意度」與「價格競爭力」進行多維度加權評分，建立長期合作名單。")
 
-    st.subheader("🎯 供應商評等與綜合得分")
-    st.dataframe(df_suppliers[['國外廠商名稱', '國家', '交期延遲天數', '不良率_%', '綜合評分', '評等']], use_container_width=True)
+    # 初始化評鑑資料
+    if 'supplier_eval_df' not in st.session_state:
+        st.session_state.supplier_eval_df = pd.DataFrame([
+            {"廠商名稱": "捷達國際物流", "類別": "貨代/船務", "交期準時率(%)": 95, "配合度與服務(1-10)": 9, "異常處理速度(1-10)": 8, "價格優勢(1-10)": 7},
+            {"廠商名稱": "萬達通運", "類別": "貨代/船務", "交期準時率(%)": 90, "配合度與服務(1-10)": 8, "異常處理速度(1-10)": 9, "價格優勢(1-10)": 8},
+            {"廠商名稱": "順豐/快遞專線", "類別": "快遞/專線", "交期準時率(%)": 98, "配合度與服務(1-10)": 9, "異常處理速度(1-10)": 7, "價格優勢(1-10)": 5},
+            {"廠商名稱": "Alpha Global Inc.", "類別": "國外供應商", "交期準時率(%)": 85, "配合度與服務(1-10)": 7, "異常處理速度(1-10)": 6, "價格優勢(1-10)": 9}
+        ])
 
+    st.subheader("📊 1. 評分權重設定 (%)")
+    w_col1, w_col2, w_col3, w_col4 = st.columns(4)
+    w_delivery = w_col1.number_input("交期準時權重 (%)", value=30, step=5)
+    w_service = w_col2.number_input("服務配合度權重 (%)", value=25, step=5)
+    w_issue = w_col3.number_input("異常處理權重 (%)", value=25, step=5)
+    w_price = w_col4.number_input("價格優勢權重 (%)", value=20, step=5)
+
+    # 檢查權重總和
+    total_weight = w_delivery + w_service + w_issue + w_price
+    if total_weight != 100:
+        st.warning(f"⚠️ 當前權重總和為 {total_weight}%，建議調整為 100% 以確保計分精準。")
+
+    st.subheader("📝 2. 廠商績效資料編輯表")
+    edited_supp_df = st.data_editor(
+        st.session_state.supplier_eval_df,
+        num_rows="dynamic",
+        key="supplier_editor",
+        use_container_width=True,
+        column_config={
+            "交期準時率(%)": st.column_config.NumberColumn("交期準時率 (%)", min_value=0, max_value=100, format="%d%%"),
+            "配合度與服務(1-10)": st.column_config.NumberColumn("配合度 (1-10)", min_value=1, max_value=10, step=1),
+            "異常處理速度(1-10)": st.column_config.NumberColumn("異常處理 (1-10)", min_value=1, max_value=10, step=1),
+            "價格優勢(1-10)": st.column_config.NumberColumn("價格優勢 (1-10)", min_value=1, max_value=10, step=1),
+        }
+    )
+    st.session_state.supplier_eval_df = edited_supp_df
+
+    # 計算綜合得分與評等
+    if not edited_supp_df.empty:
+        calc_df = edited_supp_df.copy()
+        calc_df['綜合得分'] = (
+            (calc_df['交期準時率(%)'] * (w_delivery / 100)) +
+            (calc_df['配合度與服務(1-10)'] * 10 * (w_service / 100)) +
+            (calc_df['異常處理速度(1-10)'] * 10 * (w_issue / 100)) +
+            (calc_df['價格優勢(1-10)'] * 10 * (w_price / 100))
+        ).round(1)
+
+        def get_grade(score):
+            if score >= 85: return "🥇 A級 (優良/優先合作)"
+            elif score >= 70: return "🥈 B級 (合格/持續觀察)"
+            else: return "⚠️ C級 (劣評/建議替換)"
+
+        calc_df['評鑑等級'] = calc_df['綜合得分'].apply(get_grade)
+
+        st.subheader("🏆 3. 綜合評鑑結果排行榜")
+        st.dataframe(
+            calc_df[['廠商名稱', '類別', '綜合得分', '評鑑等級']].sort_values(by='綜合得分', ascending=False),
+            use_container_width=True
+        )
 # =============================================================================
-# TAB 3: 產品總落地成本 (Landed Cost) 計算器
+# TAB 3: AI 國貿溝通秘書
 # =============================================================================
 with tab3:
-    st.header("📦 進口產品單件「總落地成本 (Landed Cost)」平攤算力")
-    st.caption("💡 解決計算機痛點：精準將海運費、本地雜費、關稅平攤至單件商品，算出真正的保本賣價。")
+    st.header("🤖 AI 國貿溝通秘書")
     
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
-        po_qty = st.number_input("本次進口總數量 (PCS)", value=1000, step=100)
-        unit_fob = st.number_input("商品單件 FOB 價格 (USD)", value=25.0, step=1.0)
-        exchange_rate = st.number_input("預估匯率 (USD to NTD)", value=32.0, step=0.1)
-        tariff_rate = st.number_input("進口關稅稅率 (%)", value=5.0, step=0.5)
-
-    with col_b:
-        selected_forwarder = st.selectbox("選擇運送的貨代/船公司方案：", edited_df['廠商名稱'].unique(), key="tab3_fw_select")
-        f_row = edited_df[edited_df['廠商名稱'] == selected_forwarder].iloc[0]
+    # 確保有貨代資料可供選擇
+    if 'freight_list' in st.session_state and len(st.session_state.freight_list) > 0:
+        fw_names = [item['廠商名稱'] for item in st.session_state.freight_list]
+        target_fw = st.selectbox("選擇談判目標貨代：", options=fw_names)
         
-        shipping_cost_ntd = f_row['總金額_NTD']
-        st.info(f"已自動帶入 **{selected_forwarder}** (+{f_row['配合報關行']}) 總物流費用：NT$ {shipping_cost_ntd:,.0f}")
-
-    total_fob_ntd = po_qty * unit_fob * exchange_rate
-    duty_ntd = (total_fob_ntd + shipping_cost_ntd) * (tariff_rate / 100)
-    total_landed_cost_ntd = total_fob_ntd + shipping_cost_ntd + duty_ntd
-    unit_landed_cost_ntd = total_landed_cost_ntd / po_qty
-
-    st.divider()
-    st.subheader("💡 平攤試算結果")
-    res1, res2, res3 = st.columns(3)
-    res1.metric("總進口落地成本 (NTD)", f"NT$ {total_landed_cost_ntd:,.0f}")
-    res2.metric("單件商品真實落地成本 (NTD)", f"NT$ {unit_landed_cost_ntd:,.2f}")
-    res3.metric("物流與關稅附加比例", f"{((unit_landed_cost_ntd - (unit_fob*exchange_rate)) / (unit_fob*exchange_rate) * 100):,.1f}%")
-
-# =============================================================================
-# TAB 4: AI 國貿溝通秘書
-# =============================================================================
-with tab4:
-    st.header("🤖 AI 國貿溝通秘書 (根據比價劣勢自動生成談判信)")
-    st.caption("💡 解決真實痛點：自動抓出該貨代的偏高費用（如本地雜費或海運費），一鍵生成精準議價信！")
-
-    col_fw, col_lang, col_format = st.columns(3)
-
-    with col_fw:
-        target_fw = st.selectbox("1. 選擇談判目標貨代：", edited_df['廠商名稱'].unique(), key="tab4_fw_select")
-    with col_lang:
-        msg_lang = st.radio("2. 選擇信件語言：", ["繁體中文", "English"], horizontal=True)
-    with col_format:
-        msg_style = st.radio("3. 選擇發送管道格式：", ["正式 Email", "LINE / 微信 簡短訊息"], horizontal=True)
-
-    fw_info = edited_df[edited_df['廠商名稱'] == target_fw].iloc[0]
-
-    # 判斷偏高費用項目
-    highest_item_zh = "本地雜費 (THC/文件費)" if fw_info['本地雜費_NTD'] > 12000 else "海運費 (Ocean Freight)"
-    highest_item_en = "Local Charges" if fw_info['本地雜費_NTD'] > 12000 else "Ocean Freight"
-
-    if st.button("🚀 AI 生成精準談判內容"):
-        if msg_lang == "繁體中文":
-            if msg_style == "正式 Email":
-                email_content = f"""主旨：【詢價與議價確認】關於近期 40HQ 進口櫃海運報價 - [貴司名稱]
+        # 找出該貨代的詳細資料
+        fw_info = next((item for item in st.session_state.freight_list if item['廠商名稱'] == target_fw), None)
+        
+        if fw_info and st.button("🚀 生成談判 Email"):
+            local_fee = fw_info.get('本地雜費_NTD', 0)
+            email_content = f"""主旨：【運費確認】關於近期報價 - 議價申請
 
 {target_fw} 業務團隊 您好：
 
-感謝貴司先前提供上海至基隆的 40HQ 海運報價。
+感謝貴公司提供的報價。經評估後發現本次【本地雜費】（NT$ {local_fee:,.0f}）稍微高出預算。
+考量我們後續有穩定的出貨需求，請問該費用是否有微調或給予折扣的空間？
 
-經我司內部評估，發現貴司的【{highest_item_zh}】（目前報價為 NT$ {fw_info['本地雜費_NTD']:,.0f}）稍高於我司本季的預算編列。
+若價格能進行微調，我們將優先安排交給貴公司承攬，期待您的回覆！
 
-考慮到雙方長期穩定的合作關係與我司後續持續的出貨量，想請教此部分費用是否有微調或折讓的空間？
-
-若價格能符合預算，我們非常希望能將本次運價優先安排給貴司承攬。
-
-期待您的回覆，感謝！
-
-順頌 商祺
-
-[您的姓名 / 公司名稱]
-進口物流部"""
-            else:  # LINE / 微信 簡短訊息
-                email_content = f"""{target_fw} 業務您好！感謝先前的 40HQ 報價。我們評估後很希望交給你們跑，但發現【{highest_item_zh}】稍微超出我們預算一點點，想問一下這部分有沒有優惠空間呢？如果可以的話我們這兩天就直接下單，再麻煩您幫忙確認一下，謝謝！"""
-
-        else:  # English
-            if msg_style == "正式 Email":
-                email_content = f"""Subject: Rate Inquiry and Negotiation for Upcoming Shipment - [Our Company Name]
-
-Dear {target_fw} Team,
-
-Thank you for providing your recent rate quote for the 40HQ shipment.
-
-After evaluating your quote alongside our budget, we noticed that your {highest_item_en} (currently quoted at NTD {fw_info['本地雜費_NTD']:,.0f}) is slightly higher than our target allocation.
-
-Given our regular shipping volume and long-term partnership, could you please review if there is any flexibility to adjust the {highest_item_en}?
-
-We would love to finalize the booking with your team if we can align on the cost.
-
-Looking forward to your swift response.
-
-Best regards,
-[Your Name]
-Import Logistics Department"""
-            else:  # LINE / 微信 簡短訊息
-                email_content = f"""Hi {target_fw} team, thanks for the 40HQ quote! We’d love to book with you, but the {highest_item_en} is slightly over our budget. Is there any flexibility on this rate? If we can align on price, we can confirm the booking right away. Thanks!"""
-
-        st.subheader("📋 生成的溝通文字 (可直接複製發送)：")
-        st.text_area("", value=email_content, height=280)
+順頌 商祺"""
+            st.text_area("生成內容：", value=email_content, height=220)
+    else:
+        st.info("💡 請先至 TAB 1 解析或載入貨代報價資料，才能在此產生談判信件。")
